@@ -5,7 +5,7 @@
  * Version: 0.1
  *
  * Description:
- * Generate Cassandra JMX stats into a file so we can monitor through monitoring tool.
+ * Generate Cassandra JMX stats into a file so we can monitor via Zabbix.
  * Compatible with Cassandra 1.1.6
  *
  */
@@ -230,7 +230,7 @@ public class CassyCmd {
     }
 
     private void log(String s) {
-        logger.info(String.format("[%-15s] %s",logger,s));
+        logger.info(String.format("[%-15s] %s",DEFAULT_HOST,s));
     }
 
     public static void main(String[] args) throws IOException, InterruptedException, ConfigurationException, ParseException{
