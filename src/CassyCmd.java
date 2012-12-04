@@ -11,42 +11,30 @@
  */
 
 import java.io.IOException;
+import java.io.PrintStream;
 import java.lang.management.MemoryUsage;
 import java.net.ConnectException;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.text.DecimalFormat;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.Map.Entry;
-import java.util.Set;
 import java.util.concurrent.ExecutionException;
+
+import org.apache.cassandra.service.CacheServiceMBean;
+import org.apache.cassandra.service.StorageProxyMBean;
+import org.apache.commons.cli.*;
+
 import org.apache.cassandra.concurrent.JMXEnabledThreadPoolExecutorMBean;
 import org.apache.cassandra.config.ConfigurationException;
 import org.apache.cassandra.db.ColumnFamilyStoreMBean;
 import org.apache.cassandra.db.compaction.CompactionManagerMBean;
 import org.apache.cassandra.db.compaction.OperationType;
-import org.apache.cassandra.locator.EndpointSnitchInfoMBean;
 import org.apache.cassandra.net.MessagingServiceMBean;
-import org.apache.cassandra.service.CacheServiceMBean;
-import org.apache.cassandra.service.StorageProxyMBean;
 import org.apache.cassandra.thrift.InvalidRequestException;
 import org.apache.cassandra.utils.EstimatedHistogram;
 import org.apache.cassandra.utils.Pair;
-import org.apache.cassandra.tools.NodeProbe;
-import org.apache.commons.cli.CommandLine;
-import org.apache.commons.cli.CommandLineParser;
-import org.apache.commons.cli.HelpFormatter;
-import org.apache.commons.cli.Option;
-import org.apache.commons.cli.Options;
-import org.apache.commons.cli.ParseException;
-import org.apache.commons.cli.PosixParser;
+import org.apache.cassandra.tools.*;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -116,6 +104,89 @@ public class CassyCmd {
                 cacheService.getRowCacheSavePeriodInSeconds()));
     }
 
+    /**
+     * Write a textual representation of the Cassandra ring.
+     *
+     * @param outs the stream to write to
+     */
+    public void printRing(String keyspace)
+    {
+        Map<String, String> tokenToEndpoint = probe.getTokenToEndpointMap();
+        List<String> sortedTokens = new ArrayList<String>(tokenToEndpoint.keySet());
+
+        Collection<String> liveNodes = probe.getLiveNodes();
+        Collection<String> deadNodes = probe.getUnreachableNodes();
+        Collection<String> joiningNodes = probe.getJoiningNodes();
+        Collection<String> leavingNodes = probe.getLeavingNodes();
+        Collection<String> movingNodes = probe.getMovingNodes();
+        Map<String, String> loadMap = probe.getLoadMap();
+
+        String format = "%-16s%-12s%-12s%-7s%-8s%-16s%-20s%-44s";
+
+        // Calculate per-token ownership of the ring
+        Map<String, Float> ownerships;
+        try
+        {
+            ownerships = probe.effectiveOwnership(keyspace);
+            log(String.format(format, "Address", "DC", "Rack", "Status", "State", "Load", "Effective-Ownership", "Token"));
+        }
+        catch (ConfigurationException ex)
+        {
+            ownerships = probe.getOwnership();
+            log(String.format("Note: Ownership information does not include topology, please specify a keyspace. \n"));
+            log(String.format(format, "Address", "DC", "Rack", "Status", "State", "Load", "Owns", "Token"));
+        }
+
+        // show pre-wrap token twice so you can always read a node's range as
+        // (previous line token, current line token]
+        if (sortedTokens.size() > 1)
+            log(String.format(format, "", "", "", "", "", "", "", sortedTokens.get(sortedTokens.size() - 1)));
+
+        for (String token : sortedTokens)
+        {
+            String primaryEndpoint = tokenToEndpoint.get(token);
+            String dataCenter;
+            try
+            {
+                dataCenter = probe.getEndpointSnitchInfoProxy().getDatacenter(primaryEndpoint);
+            }
+            catch (UnknownHostException e)
+            {
+                dataCenter = "Unknown";
+            }
+            String rack;
+            try
+            {
+                rack = probe.getEndpointSnitchInfoProxy().getRack(primaryEndpoint);
+            }
+            catch (UnknownHostException e)
+            {
+                rack = "Unknown";
+            }
+            String status = liveNodes.contains(primaryEndpoint)
+                    ? "Up"
+                    : deadNodes.contains(primaryEndpoint)
+                    ? "Down"
+                    : "?";
+
+            String state = "Normal";
+
+            if (joiningNodes.contains(primaryEndpoint))
+                state = "Joining";
+            else if (leavingNodes.contains(primaryEndpoint))
+                state = "Leaving";
+            else if (movingNodes.contains(primaryEndpoint))
+                state = "Moving";
+
+            String load = loadMap.containsKey(primaryEndpoint)
+                    ? loadMap.get(primaryEndpoint)
+                    : "?";
+            String owns = new DecimalFormat("##0.00%").format(ownerships.get(token) == null ? 0.0F : ownerships.get(token));
+            log(String.format(format, primaryEndpoint, dataCenter, rack, status, state, load, owns, token));
+        }
+        log(String.format("%n"));
+    }
+
     public void printThreadPoolStats()
     {
         log(String.format("%-25s%10s%10s%15s%10s%18s", "Pool Name", "Active", "Pending", "Completed", "Blocked", "All time blocked"));
@@ -134,6 +205,7 @@ public class CassyCmd {
                     threadPoolProxy.getCurrentlyBlockedTasks(),
                     threadPoolProxy.getTotalBlockedTasks()));
         }
+        log(String.format("%n"));
     }
 
     public void printColumnFamilyStats()
@@ -225,7 +297,7 @@ public class CassyCmd {
 
                 log(String.format(""));
             }
-            log(String.format("----------------"));
+            log(String.format("----------------%n"));
         }
     }
 
@@ -236,6 +308,7 @@ public class CassyCmd {
     public static void main(String[] args) throws IOException, InterruptedException, ConfigurationException, ParseException{
         String username = "";
         String password = "";
+
         NodeProbe probe = null;
         try
         {
@@ -248,6 +321,7 @@ public class CassyCmd {
         }
         CassyCmd cassyCmd = new CassyCmd(probe);
         cassyCmd.printInfo();
+        cassyCmd.printRing(null);
         cassyCmd.printThreadPoolStats();
         cassyCmd.printColumnFamilyStats();
         System.exit(0);
