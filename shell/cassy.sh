@@ -1,7 +1,8 @@
 #!/bin/sh
 
 if [ $# -lt 2 ]; then
-    echo "usage: $0 -w [polling intervals in sec]" 1>&2
+    echo "usage: $0 -w [sec]" 1>&2
+	echo "   -w, wait interval in seconds " 1>&2
     exit 1
 fi
 
