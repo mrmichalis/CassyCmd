@@ -1,5 +1,10 @@
 #!/bin/sh
 
+if [ $# -lt 2 ]; then
+    echo "usage: $0 -w [polling intervals in sec]" 1>&2
+    exit 1
+fi
+
 if [ "x$CASSANDRA_INCLUDE" = "x" ]; then
     for include in /usr/share/cassandra/cassandra.in.sh \
                    /usr/local/share/cassandra/cassandra.in.sh \
@@ -39,7 +44,7 @@ for STATS in ring info tpstats cfstats; do
 	else
 		eval exec $JAVA -cp .:$CLASSPATH:cassy.jar\
 			  -Dlog4j.configuration=log4j.${STATS}.properties \
-			  com.omnifone.CassyCmd $@ $STATS -w 10 & >/dev/null 2>&1
+			  com.omnifone.CassyCmd $STATS $@ & >/dev/null 2>&1
 		echo $! > $STATS.PID
 		echo "$STATS started with PID: $(cat $STATS.PID)"
 	fi
